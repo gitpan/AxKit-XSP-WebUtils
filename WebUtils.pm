@@ -1,14 +1,16 @@
-# $Id: WebUtils.pm,v 1.3 2001/06/08 15:50:39 matt Exp $
+# $Id: WebUtils.pm,v 1.4 2001/11/05 11:57:03 matt Exp $
 
 # Original Code and comments from Steve Willer.
 
 package AxKit::XSP::WebUtils;
 
-$VERSION = "1.3_90";
+$VERSION = "1.4";
 
 # taglib stuff
 use AxKit 1.4;
 use Apache;
+use Apache::Constants qw(OK);
+use Apache::Util;
 use Apache::AxKit::Language::XSP::TaglibHelper;
 sub parse_char  { Apache::AxKit::Language::XSP::TaglibHelper::parse_char(@_); }
 sub parse_start { Apache::AxKit::Language::XSP::TaglibHelper::parse_start(@_); }
@@ -27,6 +29,9 @@ $NS = 'http://axkit.org/NS/xsp/webutils/v1';
   'url_encode($string)',
   'url_decode($string)',
   'header($name;$value)',
+  'return_code($code)',
+  'username()',
+  'password()',
 );
 
 @ISA = qw(Apache::AxKit::Language::XSP);
@@ -137,6 +142,34 @@ sub url_encode ($) {
 
 sub url_decode ($) {
     return Apache::Util::unescape_uri(shift);
+}
+
+sub return_code ($) {
+    my $code = shift;
+
+    my $Request = AxKit::Apache->request;
+
+    $Request->status($code);
+    
+    $Request->send_http_header;
+    
+    Apache::exit();
+}
+
+sub username () {
+    my $r = AxKit::Apache->request;
+    
+    return $r->connection->user;
+}
+
+sub password () {
+    my $r = AxKit::Apache->request;
+    
+    my ($res, $pwd) = $r->get_basic_auth_pw;
+    if ($res == OK) {
+        return $pwd;
+    }
+    return;
 }
 
 1;

@@ -1,10 +1,10 @@
-# $Id: WebUtils.pm,v 1.4 2001/11/05 11:57:03 matt Exp $
+# $Id: WebUtils.pm,v 1.8 2003/06/17 19:49:25 matt Exp $
 
 # Original Code and comments from Steve Willer.
 
 package AxKit::XSP::WebUtils;
 
-$VERSION = "1.4";
+$VERSION = "1.5";
 
 # taglib stuff
 use AxKit 1.4;
@@ -25,7 +25,7 @@ $NS = 'http://axkit.org/NS/xsp/webutils/v1';
   'request_uri()',
   'request_host()',
   'server_root()',
-  'redirect($uri;$host,$secure)',
+  'redirect($uri;$host,$secure,$use_refresh)',
   'url_encode($string)',
   'url_decode($string)',
   'header($name;$value)',
@@ -73,11 +73,13 @@ sub request_host () {
     return $hostname;
 }
 
-sub redirect ($;$$) {
-    my ($uri, $host, $secure) = @_;
+sub redirect ($;$$$) {
+    my ($uri, $host, $secure, $use_refresh) = @_;
     
     if (lc($secure) eq 'yes') { $secure = 1 }
-    if (lc($secure) eq 'no') { $secure = 0 }
+    elsif (lc($secure) eq 'no') { $secure = 0 }
+    if (lc($use_refresh) eq 'yes') { $use_refresh = 1 }
+    elsif (lc($use_refresh) eq 'no') { $use_refresh = 0 }
     
     my $myhost = $host;
 
@@ -88,14 +90,14 @@ sub redirect ($;$$) {
             $uri = "./$uri" if $uri =~ /^\./;
 
             # relative path, so let's resolve the path ourselves
-            my $base = $Request->uri;
-            $base =~ s#/[^/]+$#/#;
-            $uri = "$base$uri";
-            $uri =~ s#/./#/#g;             # embedded ./
-            $uri =~ s#([^/]+)/\.\./##g;    # embedded ../
-            $uri =~ s#([^/]+)/\.\.$##g;    # ending with ../
-            $uri =~ s#^/\.\./#/#g;         # ../ off of "root"
-        }
+	    my $base = $Request->uri;
+            $base =~ s{[^/]*$}{};
+	    $uri = "$base$uri";
+	    $uri =~ s{//+}{/}g;
+	    $uri =~ s{/.(/|$)}{/}g;                     # embedded ./
+	    1 while ($uri =~ s{[^/]+/\.\.(/|$)}{}g);   # embedded ../
+	    $uri =~ s{^(/\.\.)+(/|$)}{/}g;              # ../ off of "root"
+	}
 
         if (not defined $host) {
             $myhost = $Request->header_in("Host");
@@ -111,12 +113,26 @@ sub redirect ($;$$) {
         
         my $scheme = 'http';
         $scheme = 'https' if $secure; # Hmm, might break if $port was set above...
-        $Request->header_out("Location" => "${scheme}://${myhost}${uri}");
-        $Request->status(302);
+        if ($use_refresh) {
+            $Request->header_out("Refresh" => "0; url=${scheme}://${myhost}${uri}");
+            $Request->content_type("text/html");
+            $Request->status(200);
+        }
+        else {
+            $Request->header_out("Location" => "${scheme}://${myhost}${uri}");
+            $Request->status(302);
+        }
     }
     else {
-        $Request->header_out("Location" => "$uri");
-        $Request->status(302);
+        if ($use_refresh) {
+            $Request->header_out("Refresh" => "0; url=$uri");
+            $Request->content_type("text/html");
+            $Request->status(200);
+        }
+        else {
+            $Request->header_out("Location" => $uri);
+            $Request->status(302);
+        }
     }
     
     $Request->send_http_header;

@@ -1,16 +1,18 @@
-# $Id: WebUtils.pm,v 1.8 2003/06/17 19:49:25 matt Exp $
+# $Id: WebUtils.pm,v 1.9 2003/07/10 09:43:20 matt Exp $
 
 # Original Code and comments from Steve Willer.
 
 package AxKit::XSP::WebUtils;
 
-$VERSION = "1.5";
+$VERSION = "1.6";
 
 # taglib stuff
 use AxKit 1.4;
 use Apache;
 use Apache::Constants qw(OK);
 use Apache::Util;
+use Apache::Request;
+use Apache::URI;
 use Apache::AxKit::Language::XSP::TaglibHelper;
 sub parse_char  { Apache::AxKit::Language::XSP::TaglibHelper::parse_char(@_); }
 sub parse_start { Apache::AxKit::Language::XSP::TaglibHelper::parse_start(@_); }
@@ -32,6 +34,17 @@ $NS = 'http://axkit.org/NS/xsp/webutils/v1';
   'return_code($code)',
   'username()',
   'password()',
+  'request_parsed_uri(;$omit)',
+  'request_prev_parsed_uri(;$omit)',
+  'request_prev_uri()',
+  'request_prev_query_string()',
+  'request_prev_param($name)',
+  'match_useragent($name)',
+  'is_https()',
+  'is_initial_req()',
+  'variant_list():as_xml=true',
+  'error_notes()',
+  'server_admin()',
 );
 
 @ISA = qw(Apache::AxKit::Language::XSP);
@@ -90,14 +103,14 @@ sub redirect ($;$$$) {
             $uri = "./$uri" if $uri =~ /^\./;
 
             # relative path, so let's resolve the path ourselves
-	    my $base = $Request->uri;
+        my $base = $Request->uri;
             $base =~ s{[^/]*$}{};
-	    $uri = "$base$uri";
-	    $uri =~ s{//+}{/}g;
-	    $uri =~ s{/.(/|$)}{/}g;                     # embedded ./
-	    1 while ($uri =~ s{[^/]+/\.\.(/|$)}{}g);   # embedded ../
-	    $uri =~ s{^(/\.\.)+(/|$)}{/}g;              # ../ off of "root"
-	}
+        $uri = "$base$uri";
+        $uri =~ s{//+}{/}g;
+        $uri =~ s{/.(/|$)}{/}g;                     # embedded ./
+        1 while ($uri =~ s{[^/]+/\.\.(/|$)}{}g);   # embedded ../
+        $uri =~ s{^(/\.\.)+(/|$)}{/}g;              # ../ off of "root"
+    }
 
         if (not defined $host) {
             $myhost = $Request->header_in("Host");
@@ -188,6 +201,94 @@ sub password () {
     return;
 }
 
+sub request_parsed_uri ($) {
+    my $omit = shift;
+    my $r = AxKit::Apache->request;
+    my $uri = Apache::URI->parse($r);
+
+    if ($omit eq 'path') {
+        $uri->path(undef);
+        $uri->query(undef); # we don't want a query without a path
+    }
+    elsif ($omit eq 'path_info' or $omit eq 'query') {
+        $uri->$omit(undef);
+    }
+
+    return $uri->unparse;
+}
+
+sub request_prev_parsed_uri ($) {
+    my $omit = shift;
+    my $r = AxKit::Apache->request;
+    my $uri = Apache::URI->parse($r->prev||$r);
+
+    if ($omit eq 'path') {
+        $uri->path(undef);
+        $uri->query(undef); # we don't want a query without a path
+    }
+    elsif ($omit eq 'path_info' or $omit eq 'query') {
+        $uri->$omit(undef);
+    }
+
+    return $uri->unparse;
+}
+
+sub request_prev_uri () {
+    my $r = AxKit::Apache->request;
+    return ($r->prev||$r)->uri;
+}
+
+sub request_prev_query_string () {
+    my $r = AxKit::Apache->request;
+    return ($r->prev||$r)->query_string;
+}
+
+sub request_prev_param ($) {
+    my $name = shift;
+    my $apr = Apache::Request->instance((AxKit::Apache->request->prev||AxKit::Apache->request));
+
+    return $apr->param($name);
+}
+
+sub match_useragent ($) {
+    my $name = shift;
+    my $r = AxKit::Apache->request;
+
+    return $r->header_in('User-Agent') =~ $name;
+}
+
+sub is_https () {
+    my $r = AxKit::Apache->request;
+    return 1 if $r->subprocess_env('https');
+}
+
+sub is_initial_req () {
+    my $r = AxKit::Apache->request;
+    return $r->is_initial_req;
+}
+
+sub variant_list () {
+    my $r = AxKit::Apache->request;
+    my $variant_list = ($r->prev||$r)->notes('variant-list');
+
+    $variant_list =~ s/([^:>])\n/$1<\/li>\n/g; # tidy up single li-tags because 
+                                               # mod_negotiation's list is not
+                                               # well-balanced up to Apache 1.3.28
+
+    return $variant_list;
+}
+
+sub error_notes () {
+    my $r = AxKit::Apache->request;
+    return ($r->prev||$r)->notes('error-notes');
+}
+
+sub server_admin () {
+    my $r = AxKit::Apache->request;
+    return $r->server->server_admin;
+}
+
+
 1;
 
 __END__
@@ -250,7 +351,7 @@ Returns the current query string
 
 =head2 C<<web:request_uri/>>
 
-Returns the full URI of the current request
+Returns the requested URI minus optional query string
 
 =head2 C<<web:request_host/>>
 
@@ -331,6 +432,175 @@ Example:
   Your browser is: <web:header name="HTTP_USER_AGENT"/>
   </p>
 
+=head2 C<<web:return_code/>>
+
+This tag allows you to set the reply status for the client request.
+
+Parameters:
+
+=over 4
+
+=item code (required)
+
+The integer value of a valid HTTP status code.
+
+=back
+
+=head2 C<<web:username/>>
+
+Returns the name of the authenticated user.
+
+=head2 C<<web:password/>>
+
+If the current request is protected by Basic authentication, this tag
+will return the decoded password sent by the client.
+
+=head2 C<<web:request_parsed_uri>>
+
+This tag allows you to get the fully parsed URI for the current request.
+In contrast to <web:request_uri/> the parsed URI will always include things like
+scheme, hostname, or the querystring.
+
+Parameters:
+
+=over 4
+
+=item omit (optional)
+
+Valid values: B<path>, B<path_info>, and B<query>.
+If specified, the corresponding URL components will be ommited for the return value.
+
+=back
+
+=head2 C<<web:request_prev_parsed_uri>>
+
+This tag allows you to get the fully parsed URI for the previous request. This can be useful
+in 403 error documents where it is required to post login information back to the originally
+requested URI.
+
+Parameters:
+
+=over 4
+
+=item omit (optional)
+
+Valid values: B<path>, B<path_info>, and B<query>.
+If specified, the corresponding URL components will be ommited for the return value.
+
+=back
+
+Example:
+
+  <p>Access Denied. Please login</p>
+  <form method="post" name="login">
+      <xsp:attribute name="action">
+          <web:request_prev_parsed_uri omit="query"/>
+      </xsp:attribute>
+      ...
+
+=head2 C<<web:request_prev_uri/>>
+
+Returns the URI of the previous request minus optional query string
+
+=head2 C<<web:request_prev_query_string/>>
+
+Returns the query string of the previous request.
+
+=head2 C<<web:request_prev_param name="...">>
+
+Returns the value of the requested CGI parameter of the previous request.
+
+Parameters:
+
+=over 4
+
+=item name (required)
+
+The name of the parameter to be retrieved.
+
+=back
+
+=head2 C<<web:match_useragent name="...">>
+
+Returns true if the User Agent pattern in B<name> matches the current User Agent.
+
+Parameters:
+
+=over 4
+
+=item name (required)
+
+A User Agent pattern string to be matched.
+
+=back
+
+Example:
+
+  <xsp:logic>
+  if (!<web:match_useragent name="MSIE|Gecko|Lynx|Opera"/>) {
+  </xsp:logic>
+      <h1>Sorry, your Web browser is not supported.</h1>
+  <xsp:logic>
+  }
+  else {
+  </xsp:logic>
+  ...
+
+=head2 C<<web:is_https/>>
+
+Returns true if the current request comes in via SSL.
+
+Example:
+
+  <xsp:logic>
+  if (!<web:is_https/>) {
+  </xsp:logic>
+    <a>
+      <xsp:attribute name="href">
+        https://<web:request_host/><web:request_uri/>
+      </xsp:attribute>
+      use secure connection
+    </a>
+  <xsp:logic>
+  }
+  </xsp:logic>
+
+=head2 C<<web:is_initial_req/>>
+
+Returns true if the current request is the first internal request, returns
+false if the request is a sub-request or an internal redirect.
+
+=head2 C<<web:variant_list/>>
+
+Returns the list of variants returned by mod_negotation in case of a 406 HTTP status code.
+Useful for 406 error documents.
+
+Example:
+
+  <h1>406 Not Acceptable</h1>
+  <p>
+    An appropriate representation of the requested resource <web:request_prev_uri/>
+    could not be found on this server.
+  </p>
+  <web:variant_list/>
+
+=head2 C<<web:server_admin/>>
+
+Returns the value of the Apache "ServerAdmin" config directive.
+
+=head2 C<<web:error_notes/>>
+
+Returns the last 'error-notes' entry set by Apache. Useful for verbose 500 error documents.
+
+Example:
+
+    <h1>Server Error</h1>
+
+    <p>An error occured. If the problem persists, please contact <web:server_admin/>.</p>
+    <p>Error Details:<br/>
+        <web:error_notes/>
+    </p>
+
 =head1 AUTHOR
 
 Matt Sergeant, matt@axkit.com
@@ -343,3 +613,4 @@ This software is Copyright 2001 AxKit.com Ltd.
 
 You may use or redistribute this software under the terms of either the
 Perl Artistic License, or the GPL version 2.0 or higher.
+
